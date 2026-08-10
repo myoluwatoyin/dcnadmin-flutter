@@ -19,6 +19,12 @@ This scaffold intentionally includes only Flutter mobile platforms:
 
 No Flutter web platform was generated.
 
+## Handoff Notes
+
+Claude should read `CLAUDE.md` and `docs/product-brief-for-claude.md` before building. These files explain the real DCN Admin product behavior, Firebase expectations, login/signup changes from the prototype design, required signup fields, and backend data requirements.
+
+Brand assets are available in `assets/branding/`.
+
 ## Firebase
 
 FlutterFire has generated:
