@@ -1,0 +1,253 @@
+rules_version = '2';
+
+// DCN Admin Firestore rules.
+//
+// Access tiers:
+//  - Owner: a user reads/writes their own uid-scoped docs.
+//  - Department lead (HOD/Sub-HOD): reads/writes their department's data,
+//    authorized via custom claims { role, dept } set on the auth token.
+//  - Pastor / Super-Admin: church-wide (all departments).
+//
+// Pre-auth reads (member-ID login, inviter search) use minimal non-PII public
+// projections (member_login, worker_directory) — never the private user docs.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Worker-type roles minted by decideApplication. The Firebase project is
+    // shared with the public DCN Sermons member app, so "signed in" alone is
+    // not enough: every rule below is for church workers only. Members have no
+    // `role` claim and are therefore treated as signed out here.
+    function isWorker() {
+      return request.auth != null
+        && request.auth.token.role in ['WORKER', 'SUBHOD', 'HOD', 'PASTOR', 'SUPER_ADMIN'];
+    }
+    function signedIn() { return isWorker(); }
+    function role() { return request.auth.token.role; }
+    function dept() { return request.auth.token.dept; }
+    function isPastor() { return signedIn() && role() in ['PASTOR', 'SUPER_ADMIN']; }
+    function isLeadOf(d) {
+      return signedIn() && role() in ['HOD', 'SUBHOD'] && dept() == d;
+    }
+    // Can this caller manage department `d`'s data?
+    function manages(d) { return isPastor() || isLeadOf(d); }
+
+    // ── Public reference data (signup, pre-auth) ────────────────
+    match /departments/{id} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /invite_codes/{id} {
+      allow read: if true;
+      // The Pastor generates and revokes invite codes.
+      allow write: if isPastor();
+    }
+    match /member_login/{memberId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /worker_directory/{uid} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Applications ────────────────────────────────────────────
+    // Created and decided ONLY by Cloud Functions (Admin SDK) — the
+    // submitApplication function also creates the disabled auth account, and
+    // decideApplication mints the member ID / sets claims. The department's
+    // lead (or a Pastor) may read pending applications to review them.
+    match /applications/{id} {
+      allow read: if manages(resource.data.department);
+      allow create, update, delete: if false;
+    }
+
+    // ── User records ────────────────────────────────────────────
+    // Owner reads their own; a department lead reads their team; Pastor reads
+    // all. Written by admin (Admin SDK) only.
+    match /users/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid)
+        || manages(resource.data.department_code);
+      // The Pastor may update a user's account status (suspend / reinstate);
+      // the owner may edit their own profile fields (e.g. avatar photo).
+      allow update: if (isPastor()
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'suspend_reason', 'suspended_at']))
+        || (signedIn() && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['person', 'phone', 'search_name']));
+      allow create, delete: if false;
+    }
+
+    // Members managed by the follow-up team. Readable by any authenticated
+    // user (HODs, assigned workers); the assigned follow-up worker creates and
+    // updates their own members (intake, call logs, status).
+    match /members/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.assigned_worker_uid == request.auth.uid;
+      // The assigned worker updates their own; the Follow-Up HOD (or Pastor)
+      // may reassign / update any member.
+      allow update: if (signedIn()
+          && resource.data.assigned_worker_uid == request.auth.uid)
+        || isPastor() || isLeadOf('FOLLOWUP');
+      allow delete: if false;
+    }
+
+    // Attendance sheets: one doc per worker per service, holding the P/A/L
+    // marks. Only the owning worker reads/writes.
+    match /attendance/{id} {
+      allow read: if signedIn() && resource.data.worker_uid == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.worker_uid == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.worker_uid == request.auth.uid
+        && request.resource.data.worker_uid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ── Tasks ───────────────────────────────────────────────────
+    // Assignee sees/updates their own; department lead reads all dept tasks,
+    // creates (assigns) them, and updates (approves/rejects/feedback).
+    match /tasks/{id} {
+      allow read: if (signedIn() && resource.data.assignee_uid == request.auth.uid)
+        || manages(resource.data.department_code);
+      allow create: if manages(request.resource.data.department_code);
+      allow update: if (signedIn()
+          && resource.data.assignee_uid == request.auth.uid
+          && request.resource.data.assignee_uid == request.auth.uid)
+        || manages(resource.data.department_code);
+      allow delete: if false;
+    }
+
+    // ── Meetings ────────────────────────────────────────────────
+    // Audience members read; department lead creates/updates dept meetings.
+    match /meetings/{id} {
+      allow read: if (signedIn() && request.auth.uid in resource.data.audience_uids)
+        || manages(resource.data.department_code);
+      allow create: if manages(request.resource.data.department_code);
+      allow update: if manages(resource.data.department_code);
+      allow delete: if false;
+    }
+
+    // ── Weekly reports ──────────────────────────────────────────
+    // Owner-only. (The HOD accountability board reads denormalized report
+    // status from the team's user docs, not these private entries.)
+    match /reports/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ── Follow-up assignments ───────────────────────────────────
+    // The assigned worker reads and logs outcomes on their own. The Follow-Up
+    // HOD and Pastor create them — including cross-department (assign any
+    // member to any worker) — the key follow-up power.
+    match /followup_assignments/{id} {
+      allow read: if signedIn() && resource.data.worker_uid == request.auth.uid;
+      allow create: if isPastor() || isLeadOf('FOLLOWUP');
+      allow update: if signedIn()
+        && resource.data.worker_uid == request.auth.uid
+        && request.resource.data.worker_uid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ── SMS engine (Follow-Up HOD / Pastor) ─────────────────────
+    // Templates, absence rules and the send log. Real sending needs Cloud
+    // Functions; these hold the configuration and history.
+    match /sms_templates/{id} {
+      allow read: if isPastor() || isLeadOf('FOLLOWUP');
+      allow write: if false;
+    }
+    match /sms_rules/{id} {
+      allow read: if isPastor() || isLeadOf('FOLLOWUP');
+      allow write: if false;
+    }
+    match /sms_log/{id} {
+      allow read: if isPastor() || isLeadOf('FOLLOWUP');
+      allow write: if false;
+    }
+
+    // ── Church-wide analytics (Pastor) ──────────────────────────
+    // Aggregated attendance/SMS/retention figures.
+    match /analytics/{id} {
+      allow read: if isPastor();
+      allow write: if false;
+    }
+
+    // ── Notifications (uid-scoped) ──────────────────────────────
+    match /notifications/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow create, delete: if false;
+    }
+
+    // ── Scorecards ──────────────────────────────────────────────
+    // Owner reads and may only ack/dispute; department lead reads, creates and
+    // edits scores for their team.
+    match /scorecards/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid)
+        || manages(resource.data.department_code);
+      allow create: if manages(request.resource.data.department_code);
+      allow update: if manages(resource.data.department_code)
+        || (signedIn()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['ack_status', 'dispute_text', 'ack_at']));
+      allow delete: if false;
+    }
+
+    // ── Life updates ────────────────────────────────────────────
+    // Worker creates and reads their own; department lead reads and responds.
+    match /life_updates/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid)
+        || manages(resource.data.department_code);
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if manages(resource.data.department_code);
+      allow delete: if false;
+    }
+
+    // ── Accountability (uid-scoped) ─────────────────────────────
+    match /accountability/{id} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    // ── Chat ────────────────────────────────────────────────────
+    // A conversation is readable/writable only by its participants. Messages
+    // check membership against the parent conversation's participant list.
+    match /conversations/{convId} {
+      // `resource == null` lets a participant `get` a not-yet-created direct
+      // thread (returns not-exists) so the client can create it. List queries
+      // never see a null resource, so this doesn't widen query access.
+      allow read: if signedIn()
+        && (resource == null || request.auth.uid in resource.data.participant_uids);
+      allow create: if signedIn() && request.auth.uid in request.resource.data.participant_uids;
+      allow update: if signedIn() && request.auth.uid in resource.data.participant_uids;
+      allow delete: if false;
+
+      match /messages/{msgId} {
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participant_uids;
+        allow create: if signedIn()
+          && request.resource.data.sender_uid == request.auth.uid
+          && request.auth.uid in get(/databases/$(database)/documents/conversations/$(convId)).data.participant_uids;
+        allow update, delete: if false;
+      }
+    }
+
+    // ── Push tokens (owner-scoped subcollection) ────────────────
+    match /users/{uid}/fcm_tokens/{token} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Deny everything else.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
