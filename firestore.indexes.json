@@ -1,0 +1,21 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "worker_directory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "search_name", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "conversations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "participant_uids", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "last_message_at", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

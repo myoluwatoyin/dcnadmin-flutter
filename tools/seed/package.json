@@ -1,0 +1,13 @@
+{
+  "name": "dcn-seed",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firestore + Auth seeder for the DCN Admin app (dev/staging data).",
+  "type": "commonjs",
+  "scripts": {
+    "seed": "node seed.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}
