@@ -1,0 +1,5 @@
+node_modules/
+*.log
+.env
+# Local secret hand-off files — never commit; deleted after upload to Secret Manager.
+*.key.local

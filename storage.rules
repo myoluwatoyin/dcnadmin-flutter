@@ -1,0 +1,57 @@
+rules_version = '2';
+
+// DCN Admin Cloud Storage rules.
+//
+// All uploads require an authenticated user and are scoped to that user's own
+// folder (request.auth.uid). Reads are open to any signed-in user so avatars
+// and member photos render across the team. Size/content-type limits guard
+// against abuse. Signup happens pre-auth, so signup photos are NOT uploaded
+// here — a profile photo is set after approval, once the user can sign in.
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Shared Firebase project: only church workers (role claim set by
+    // decideApplication) count as signed in here. DCN Sermons members use
+    // their own storage paths and are denied everything below.
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.role in ['WORKER', 'SUBHOD', 'HOD', 'PASTOR', 'SUPER_ADMIN'];
+    }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function isImage() { return request.resource.contentType.matches('image/.*'); }
+    function underMb(mb) { return request.resource.size < mb * 1024 * 1024; }
+
+    // Profile avatars: owner writes their own; any signed-in user views.
+    match /user_photos/{uid}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid) && isImage() && underMb(10);
+      allow delete: if isOwner(uid);
+    }
+
+    // Follow-up member photos: uploader writes under their own uid folder.
+    match /member_photos/{uid}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid) && isImage() && underMb(10);
+      allow delete: if isOwner(uid);
+    }
+
+    // General attachments (task submissions, life updates, report evidence).
+    match /attachments/{uid}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid) && underMb(25);
+      allow delete: if isOwner(uid);
+    }
+
+    // Bulk data imports (e.g. member CSV) scoped to the uploader.
+    match /imports/{uid}/{fileName} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid) && underMb(15);
+      allow delete: if isOwner(uid);
+    }
+
+    // Deny everything else.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,1 +1,41 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"dcnchurchadmin","appId":"1:961146804705:android:1d00bbe390c348ce9a9aa0","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"dcnchurchadmin","appId":"1:961146804705:ios:e13d550e4e2edb149a9aa0","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"dcnchurchadmin","configurations":{"android":"1:961146804705:android:1d00bbe390c348ce9a9aa0","ios":"1:961146804705:ios:e13d550e4e2edb149a9aa0"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "dcnchurchadmin",
+          "appId": "1:961146804705:android:1d00bbe390c348ce9a9aa0",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "dcnchurchadmin",
+          "appId": "1:961146804705:ios:e13d550e4e2edb149a9aa0",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "dcnchurchadmin",
+          "configurations": {
+            "android": "1:961146804705:android:1d00bbe390c348ce9a9aa0",
+            "ios": "1:961146804705:ios:e13d550e4e2edb149a9aa0"
+          }
+        }
+      }
+    }
+  }
+}
